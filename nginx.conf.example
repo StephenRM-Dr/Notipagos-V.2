@@ -1,0 +1,180 @@
+# Configuración de Nginx para SISTEMAS MV v2.0
+# Ubicación: /etc/nginx/sites-available/sistemas-mv
+# Activar: sudo ln -s /etc/nginx/sites-available/sistemas-mv /etc/nginx/sites-enabled/
+# Verificar: sudo nginx -t
+# Recargar: sudo systemctl reload nginx
+
+upstream sistemas_mv {
+    # Gunicorn corriendo en puerto 8000
+    server 127.0.0.1:8000;
+    # Para alta disponibilidad, agregar más servidores:
+    # server 127.0.0.1:8001;
+    # server 127.0.0.1:8002;
+}
+
+# Redirigir HTTP a HTTPS
+server {
+    listen 80;
+    listen [::]:80;
+    server_name tu-dominio.com www.tu-dominio.com;
+    
+    # Let's Encrypt validation
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+    
+    # Redirigir todo lo demás a HTTPS
+    location / {
+        return 301 https://$server_name$request_uri;
+    }
+}
+
+# HTTPS - Configuración Principal
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name tu-dominio.com www.tu-dominio.com;
+    
+    # ===== CERTIFICADOS SSL/TLS =====
+    # Generar con: sudo certbot certonly --standalone -d tu-dominio.com
+    ssl_certificate /etc/letsencrypt/live/tu-dominio.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/tu-dominio.com/privkey.pem;
+    
+    # ===== CONFIGURACIÓN TLS SEGURA =====
+    # TLS 1.2 mínimo
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+    
+    # HSTS - Forzar HTTPS durante 1 año
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
+    
+    # ===== SEGURIDAD - HEADERS =====
+    # Prevenir clickjacking
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    
+    # Prevenir MIME sniffing
+    add_header X-Content-Type-Options "nosniff" always;
+    
+    # Habilitar XSS protection
+    add_header X-XSS-Protection "1; mode=block" always;
+    
+    # Content Security Policy - Estricto
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self';" always;
+    
+    # Política de referrer
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    
+    # Política de feature/permissions
+    add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
+    
+    # ===== LOGS =====
+    access_log /var/log/nginx/sistemas_mv_access.log;
+    error_log /var/log/nginx/sistemas_mv_error.log warn;
+    
+    # ===== LÍMITES =====
+    # Tamaño máximo del body
+    client_max_body_size 10M;
+    
+    # Timeout
+    proxy_connect_timeout 60s;
+    proxy_send_timeout 60s;
+    proxy_read_timeout 60s;
+    
+    # ===== BUFFERING =====
+    # Buffering para grandes archivos
+    proxy_buffering on;
+    proxy_buffer_size 4k;
+    proxy_buffers 8 4k;
+    proxy_busy_buffers_size 8k;
+    
+    # ===== GZIP COMPRESSION =====
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1000;
+    gzip_proxied any;
+    gzip_types text/plain text/css text/xml text/javascript 
+               application/x-javascript application/xml+rss 
+               application/json application/javascript;
+    
+    # ===== PROXY SETTINGS =====
+    location / {
+        proxy_pass http://sistemas_mv;
+        
+        # Headers proxy
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $server_name;
+        proxy_set_header X-Forwarded-Port $server_port;
+        
+        # Connection keepalive
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        
+        # Cookies
+        proxy_cookie_path / "/";
+        proxy_cookie_domain ~^(.*)$ "$host";
+    }
+    
+    # ===== ARCHIVOS ESTÁTICOS =====
+    location ~* ^/(static|media)/ {
+        # Cache 1 mes para archivos estáticos
+        expires 30d;
+        add_header Cache-Control "public, immutable";
+        
+        # Si no existe, pasar a aplicación
+        try_files $uri @backend;
+    }
+    
+    # ===== ARCHIVOS BLOQUEADOS =====
+    location ~ /\. {
+        # Bloquear archivos ocultos (.env, .git, etc)
+        deny all;
+        access_log off;
+        log_not_found off;
+    }
+    
+    location ~ ~$ {
+        # Bloquear archivos de backup
+        deny all;
+        access_log off;
+        log_not_found off;
+    }
+    
+    # ===== HEALTH CHECK =====
+    location /health {
+        proxy_pass http://sistemas_mv;
+        access_log off;
+    }
+    
+    # ===== ROBOTS & FAVICON =====
+    location = /favicon.ico {
+        return 204;
+        access_log off;
+        log_not_found off;
+    }
+    
+    location = /robots.txt {
+        return 200 "User-agent: *\nDisallow: /admin\nDisallow: /webhook-bdv\n";
+        add_header Content-Type text/plain;
+    }
+}
+
+# ===== RATE LIMITING (GLOBAL) =====
+# Agregar al contexto http (fuera de server blocks):
+# limit_req_zone $binary_remote_addr zone=general:10m rate=10r/s;
+# limit_req_zone $binary_remote_addr zone=api:10m rate=30r/m;
+# limit_req_zone $binary_remote_addr zone=login:10m rate=5r/m;
+#
+# Luego en los location blocks:
+# location /login { limit_req zone=login burst=2; ... }
+# location /api { limit_req zone=api burst=5; ... }
+# location / { limit_req zone=general burst=20; ... }
+
+# ===== SSL SESSION CACHING =====
+# Agregar al contexto http:
+# ssl_session_cache shared:SSL:10m;
+# ssl_session_timeout 10m;
+# ssl_session_tickets off;

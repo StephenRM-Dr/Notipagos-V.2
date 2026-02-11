@@ -203,10 +203,8 @@ def admin():
 
 ## ⚙️ Configuración Inicial
 
-### Paso 1: Generar Secretos Seguros
-```bash
-python3 generate_secrets.py
-```
+### Paso 1: Configurar Variables de Entorno
+Edita el archivo `.env` (se crea automáticamente al iniciar la aplicación):
 
 Este script genera:
 - ✅ `ADMIN_PASSWORD_HASH`: Hash bcrypt de tu PIN
@@ -232,10 +230,11 @@ DB_PASS=your-secure-password
 DB_PORT=5432
 
 # ========== SEGURIDAD ==========
-# Generar con: python3 generate_secrets.py
-ADMIN_PASSWORD_HASH=$2b$12$...  # Debe ser hash bcrypt
-SECRET_KEY=a1b2c3d4e5f6...      # 64 caracteres hex
-ENCRYPTION_KEY=gAAAAAB...        # Clave Fernet
+# Las claves se generan automáticamente al iniciar la aplicación
+# PIN por defecto: 1234 (CÁMBIALO INMEDIATAMENTE)
+ADMIN_PASSWORD_HASH=$2b$12$...  # Hash bcrypt del PIN
+SECRET_KEY=a1b2c3d4e5f6...      # 64 caracteres hex (auto-generado)
+ENCRYPTION_KEY=gAAAAAB...        # Clave Fernet (auto-generada)
 
 # ========== ENTORNO ==========
 FLASK_ENV=production              # NUNCA development
@@ -258,10 +257,11 @@ DEBUG=False                        # NUNCA True
 pip install -r requirements.txt
 ```
 
-### 2. Generar Secretos
+### 2. Ejecutar la Aplicación
 ```bash
-python3 generate_secrets.py
-# Seguir las instrucciones interactivas
+python3 app.py
+# Las claves de seguridad se generan automáticamente
+# PIN por defecto: 1234 (cámbialo en .env)
 ```
 
 ### 3. Configurar .env
@@ -426,10 +426,7 @@ pg_dump -h your-host -U user dbname > backup_$(date +%Y%m%d).sql
 ## 🆘 Solución de Problemas
 
 ### "Error: SECRET_KEY no está definida"
-```bash
-python3 generate_secrets.py
-# Asegurate de haber copiado el valor a .env
-```
+Las claves se generan automáticamente al iniciar la aplicación. Verifica que el archivo `.env` existe y tiene permisos de escritura.
 
 ### "BadSignature en sesiones"
 ```bash

@@ -3,6 +3,7 @@ import re
 import os
 import pandas as pd
 import pytz
+import secrets
 from flask import Flask, request, render_template_string, redirect, url_for, session, send_file
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -10,18 +11,58 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from cryptography.fernet import Fernet
 from datetime import datetime, timedelta
 from io import BytesIO
-from dotenv import load_dotenv
+from dotenv import load_dotenv, set_key
 import logging
 
+# --- GENERACIÓN AUTOMÁTICA DE CLAVES ---
+def generar_claves_automaticas():
+    """Genera automáticamente las claves necesarias si no existen en .env"""
+    env_path = '.env'
+    env_modificado = False
+    
+    # Cargar variables actuales
+    load_dotenv(override=True)
+    
+    # Verificar y generar SECRET_KEY
+    secret_key = os.getenv("SECRET_KEY")
+    if not secret_key or secret_key == "clave_sistemas_mv_2026":
+        nuevo_secret = secrets.token_hex(32)
+        set_key(env_path, "SECRET_KEY", nuevo_secret)
+        os.environ["SECRET_KEY"] = nuevo_secret
+        print(f"✅ SECRET_KEY generada automáticamente")
+        env_modificado = True
+    
+    # Verificar y generar ENCRYPTION_KEY
+    encryption_key = os.getenv("ENCRYPTION_KEY")
+    if not encryption_key:
+        nueva_encryption = Fernet.generate_key().decode()
+        set_key(env_path, "ENCRYPTION_KEY", nueva_encryption)
+        os.environ["ENCRYPTION_KEY"] = nueva_encryption
+        print(f"✅ ENCRYPTION_KEY generada automáticamente")
+        env_modificado = True
+    
+    # Verificar y generar ADMIN_PASSWORD_HASH (PIN por defecto: 1234)
+    admin_hash = os.getenv("ADMIN_PASSWORD_HASH")
+    if not admin_hash:
+        pin_default = "1234"
+        nuevo_hash = generate_password_hash(pin_default)
+        set_key(env_path, "ADMIN_PASSWORD_HASH", nuevo_hash)
+        os.environ["ADMIN_PASSWORD_HASH"] = nuevo_hash
+        print(f"⚠️  ADMIN_PASSWORD_HASH generado con PIN por defecto: {pin_default}")
+        print(f"   CAMBIA EL PIN INMEDIATAMENTE en el archivo .env")
+        env_modificado = True
+    
+    if env_modificado:
+        print(f"\n🔒 Claves de seguridad actualizadas en {env_path}")
+        print(f"   Revisa el archivo y ajusta las credenciales de base de datos si es necesario\n")
+
 # --- CONFIGURACIÓN ---
+generar_claves_automaticas()
 load_dotenv(override=True)
 app = Flask(__name__)
 
-# CRÍTICO: Validar que SECRET_KEY existe en .env
+# Obtener SECRET_KEY (ya garantizada por la función anterior)
 secret_key = os.getenv("SECRET_KEY")
-if not secret_key or secret_key == "clave_sistemas_mv_2026":
-    raise ValueError("❌ CRÍTICO: SECRET_KEY no está definida en .env o usa el valor por defecto. Define una clave fuerte.")
-
 app.secret_key = secret_key
 limiter = Limiter(app=app, key_func=get_remote_address, default_limits=["200 per day", "50 per hour"])
 
@@ -32,8 +73,8 @@ logger = logging.getLogger(__name__)
 # Zona Horaria de Venezuela
 VET = pytz.timezone('America/Caracas')
 
-# Encriptación para datos sensibles
-ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", Fernet.generate_key().decode())
+# Encriptación para datos sensibles (ya garantizada por la función de generación automática)
+ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
 cipher_suite = Fernet(ENCRYPTION_KEY.encode() if isinstance(ENCRYPTION_KEY, str) else ENCRYPTION_KEY)
 
 # --- VALIDADORES ---
@@ -194,7 +235,7 @@ input:focus { border-color: var(--primary); background: #fdfdfd; }
 # --- VISTAS HTML ---
 HTML_LOGIN = '''<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>''' + CSS_FINAL + '''</style></head><body><div style="display:flex; align-items:center; justify-content:center; min-height:100vh; background: radial-gradient(circle at top, #004481 0%, #001a33 100%); padding: 20px;"><div class="card" style="width:100%; max-width:420px; border:none;"> <h1 style="color:var(--primary); margin-bottom:5px;">SISTEMAS MV</h1><p style="color:#777; margin-bottom:25px;">Control Administrativo v2026</p><form method="POST"><input type="password" name="password" placeholder="PIN de Seguridad" style="margin-bottom:20px;" autofocus required><button class="btn btn-primary" style="width:100%;">ENTRAR AL SISTEMA</button></form>{% if error %}<p class="error-msg">{{ error }}</p>{% endif %}<hr style="margin:25px 0; border:0; border-top:1px solid #eee;"><a href="/" class="btn btn-light" style="width:100%;">🔍 IR AL VERIFICADOR</a></div></div></body></html>'''
 
-HTML_PORTAL = '''<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>''' + CSS_FINAL + '''</style></head><body><div class="container"><div style="max-width:550px; margin: 40px auto 0; padding: 0 20px;"><div class="nav-header"><a href="/" class="btn btn-light">🔄 Recargar</a><a href="/login" class="btn btn-primary">⚙️ Acceso Admin</a></div><div class="card"><h2>Verificar Transacción</h2><p style="color:#888; font-size:14px; margin-bottom:25px;">Ingrese los datos para validar su comanda</p><form method="POST" action="/verificar"><input type="text" name="ref" placeholder="Nro de Referencia" style="margin-bottom:15px;" required><input type="text" name="comanda" placeholder="Nro de Comanda / Orden" style="margin-bottom:25px;" required><button class="btn btn-primary" style="width:100%; padding:18px;">VALIDAR AHORA</button></form>
+HTML_PORTAL = '''<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>''' + CSS_FINAL + '''</style></head><body><div class="container"><div style="max-width:550px; margin: 40px auto 0; padding: 0 20px;"><div class="nav-header"><a href="/" class="btn btn-light">🔄 Recargar</a><a href="/login" class="btn btn-primary">⚙️ Acceso Admin</a></div><div class="card"><h2>Verificar Transacción</h2><p style="color:#888; font-size:14px; margin-bottom:25px;">Ingrese los datos para validar su comanda</p><form method="POST" action="/verificar"><input type="text" name="ref" placeholder="Últimos 6 dígitos o Referencia completa" style="margin-bottom:15px;" required minlength="6"><input type="text" name="comanda" placeholder="Nro de Comanda / Orden" style="margin-bottom:25px;" required><button class="btn btn-primary" style="width:100%; padding:18px;">VALIDAR AHORA</button></form>
 {% if resultado %}
     <div class="notif-pago notif-{{ resultado.clase }}">
         <div style="display:flex; align-items:center; gap:10px;"><strong style="font-size:18px;">{{ resultado.titulo }}</strong></div>
@@ -292,15 +333,15 @@ def admin():
 @app.route('/verificar', methods=['POST'])
 @limiter.limit("10 per minute")
 def verificar():
-    """Verificar transacción con validación completa"""
+    """Verificar transacción con validación completa - Acepta referencia completa o últimos 6 dígitos"""
     ref = request.form.get('ref', '').strip()
     com_ingresada = request.form.get('comanda', '').strip()
     
-    # Validación de entrada
-    if not validar_referencia(ref):
+    # Validación de entrada - Permitir mínimo 6 caracteres
+    if not ref or len(ref) < 6:
         res = {
             "titulo": "ENTRADA INVÁLIDA",
-            "mensaje": "El número de referencia debe tener 6-20 caracteres alfanuméricos.",
+            "mensaje": "El número de referencia debe tener mínimo 6 caracteres.",
             "clase": "error"
         }
         return render_template_string(HTML_PORTAL, resultado=res)
@@ -320,16 +361,34 @@ def verificar():
         conn = get_db_connection()
         cur = conn.cursor()
         
-        # Usar parámetros preparados (protección SQL injection)
-        cur.execute(
-            "SELECT id, estado, banco, monto, referencia FROM pagos WHERE referencia = %s",
-            (ref,)
-        )
-        pago = cur.fetchone()
+        # Buscar por referencia completa o por los últimos 6 dígitos
+        if len(ref) == 6 and ref.isdigit():
+            # Búsqueda por últimos 6 dígitos
+            cur.execute(
+                "SELECT id, estado, banco, monto, referencia FROM pagos WHERE referencia LIKE %s",
+                ('%' + ref,)
+            )
+        else:
+            # Búsqueda por referencia completa
+            cur.execute(
+                "SELECT id, estado, banco, monto, referencia FROM pagos WHERE referencia = %s",
+                (ref,)
+            )
         
-        res = {"titulo": "ERROR", "mensaje": "Referencia no encontrada.", "clase": "error"}
+        pagos_encontrados = cur.fetchall()
         
-        if pago:
+        # Validar resultados
+        if not pagos_encontrados:
+            res = {"titulo": "ERROR", "mensaje": "Referencia no encontrada.", "clase": "error"}
+        elif len(pagos_encontrados) > 1:
+            res = {
+                "titulo": "REFERENCIA AMBIGUA",
+                "mensaje": f"Se encontraron {len(pagos_encontrados)} pagos con esos últimos dígitos. Por favor ingresa la referencia completa.",
+                "clase": "error"
+            }
+        else:
+            pago = pagos_encontrados[0]
+            
             if pago[1] == 'LIBRE':
                 cur.execute("""
                     UPDATE pagos 

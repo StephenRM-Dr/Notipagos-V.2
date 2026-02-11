@@ -1,17 +1,19 @@
 #!/bin/bash
-# Script de despliegue seguro - SISTEMAS MV v2.0
+# Script de despliegue para AWS EC2 Ubuntu - SISTEMAS MV v2.1
+# Uso: ./deploy.sh
 
 set -e  # Salir si hay error
 
-echo "================================"
-echo "🚀 DEPLOY SEGURO - SISTEMAS MV"
-echo "================================"
+echo "======================================="
+echo "🚀 DEPLOY AWS EC2 - SISTEMAS MV v2.1"
+echo "======================================="
 
 # Colores
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+BLUE='\033[0;34m'
+NC='\033[0m'
 
 # Funciones
 log_success() {
@@ -27,10 +29,14 @@ log_warn() {
     echo -e "${YELLOW}⚠️  $1${NC}"
 }
 
+log_info() {
+    echo -e "${BLUE}ℹ️  $1${NC}"
+}
+
 # 1. Verificar que estamos en el directorio correcto
 echo ""
 echo "1️⃣  Verificando estructura..."
-[[ -f "app_seguro.py" ]] || log_error "app_seguro.py no encontrado"
+[[ -f "app.py" ]] || log_error "app.py no encontrado"
 [[ -f "requirements.txt" ]] || log_error "requirements.txt no encontrado"
 [[ -f ".env.example" ]] || log_error ".env.example no encontrado"
 log_success "Estructura de archivos OK"
@@ -39,118 +45,241 @@ log_success "Estructura de archivos OK"
 echo ""
 echo "2️⃣  Verificando configuración..."
 if [[ ! -f ".env" ]]; then
-    log_error "Archivo .env no existe. Copia desde .env.example y completa los valores"
+    log_warn "Archivo .env no existe. Creando desde .env.example..."
+    cp .env.example .env
+    log_info "Edita .env con tus credenciales de AWS RDS/Neon"
+    log_info "nano .env"
+    read -p "Presiona Enter cuando hayas configurado .env..."
 fi
 
 # Validar que .env tiene permisos seguros
-PERMS=$(stat -f %OLp .env 2>/dev/null || stat -c %a .env)
-if [[ "$PERMS" != "600" && "$PERMS" != "400" ]]; then
-    log_warn ".env tiene permisos inseguros: $PERMS. Corrigiendo a 600..."
-    chmod 600 .env
-fi
-log_success "Archivo .env con permisos seguros"
+chmod 600 .env
+log_success "Permisos de .env configurados (600)"
 
 # Validar variables críticas
-for var in DB_HOST DB_NAME DB_USER DB_PASS ADMIN_PASSWORD_HASH SECRET_KEY ENCRYPTION_KEY; do
-    if ! grep -q "^$var=" .env; then
-        log_error "Variable $var no encontrada en .env"
+for var in DB_HOST DB_NAME DB_USER DB_PASS; do
+    if ! grep -q "^$var=" .env || grep -q "^$var=$" .env || grep -q "^$var=your-" .env; then
+        log_error "Variable $var no configurada en .env. Edita el archivo con tus credenciales reales."
     fi
 done
-log_success "Variables de entorno OK"
+log_success "Variables de entorno configuradas"
 
-# 3. Crear virtual environment si no existe
+# 3. Actualizar sistema
 echo ""
-echo "3️⃣  Configurando Python..."
+echo "3️⃣  Actualizando sistema Ubuntu..."
+sudo apt-get update -qq
+log_success "Sistema actualizado"
+
+# 4. Instalar dependencias del sistema
+echo ""
+echo "4️⃣  Instalando dependencias del sistema..."
+sudo apt-get install -y -qq python3 python3-pip python3-venv nginx > /dev/null
+log_success "Dependencias del sistema instaladas"
+
+# 5. Crear virtual environment
+echo ""
+echo "5️⃣  Configurando Python virtual environment..."
 if [[ ! -d "venv" ]]; then
-    log_warn "Virtual environment no existe. Creando..."
     python3 -m venv venv
+    log_success "Virtual environment creado"
+else
+    log_info "Virtual environment ya existe"
 fi
 
 # Activar venv
 source venv/bin/activate
 log_success "Virtual environment activado"
 
-# 4. Instalar dependencias
+# 6. Instalar dependencias Python
 echo ""
-echo "4️⃣  Instalando dependencias..."
-pip install --upgrade pip > /dev/null
-pip install -r requirements.txt > /dev/null || log_error "Error instalando dependencias"
-log_success "Dependencias instaladas"
+echo "6️⃣  Instalando dependencias Python..."
+pip install --upgrade pip -q
+pip install -r requirements.txt -q || log_error "Error instalando dependencias"
+pip install gunicorn -q
+log_success "Dependencias Python instaladas"
 
-# 5. Pruebas básicas de importación
+# 7. Verificar imports
 echo ""
-echo "5️⃣  Verificando imports..."
+echo "7️⃣  Verificando imports..."
 python3 -c "
 import flask
 import psycopg2
 import werkzeug
 import cryptography
-import flask_wtf
 from flask_limiter import Limiter
-" || log_error "Falta alguna dependencia"
+print('OK')
+" > /dev/null || log_error "Falta alguna dependencia"
 log_success "Todas las librerías importan correctamente"
 
-# 6. Validar que .env no está en git
+# 8. Crear tablas en la base de datos
 echo ""
-echo "6️⃣  Verificando seguridad de git..."
-if [[ -d ".git" ]]; then
-    if git ls-files .env 2>/dev/null | grep -q .env; then
-        log_error ".env está tracked en git. Ejecuta: git rm --cached .env"
+echo "8️⃣  Configurando base de datos..."
+if [[ -f "create_table.py" ]]; then
+    read -p "¿Crear/actualizar tablas en la BD? (s/n): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Ss]$ ]]; then
+        python3 create_table.py || log_warn "Error creando tablas (puede ser que ya existan)"
+        log_success "Tablas verificadas/creadas"
     fi
-    if ! grep -q "^.env$" .gitignore 2>/dev/null; then
-        log_warn "Agregando .env a .gitignore..."
-        echo ".env" >> .gitignore
-    fi
-    log_success "Git está configurado correctamente"
+else
+    log_warn "create_table.py no encontrado"
 fi
 
-# 7. Verificar puerto disponible
+# 9. Configurar Gunicorn como servicio systemd
 echo ""
-echo "7️⃣  Verificando puerto..."
-PORT=${PORT:-80}
-if [[ $EUID -ne 0 ]]; then
-    PORT=8000
-    log_warn "No eres root. Usando puerto 8000 en lugar de 80"
-fi
-log_success "Puerto a usar: $PORT"
+echo "9️⃣  Configurando servicio systemd..."
+CURRENT_DIR=$(pwd)
+USER=$(whoami)
 
-# 8. Crear directorios de logs
+sudo tee /etc/systemd/system/pagos.service > /dev/null <<EOF
+[Unit]
+Description=Sistemas MV - Aplicación de Pagos
+After=network.target
+
+[Service]
+Type=notify
+User=$USER
+WorkingDirectory=$CURRENT_DIR
+Environment="PATH=$CURRENT_DIR/venv/bin"
+ExecStart=$CURRENT_DIR/venv/bin/gunicorn -w 4 -b 127.0.0.1:5000 --timeout 120 app:app
+ExecReload=/bin/kill -s HUP \$MAINPID
+KillMode=mixed
+TimeoutStopSec=5
+PrivateTmp=true
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable pagos.service
+log_success "Servicio systemd configurado"
+
+# 10. Configurar Nginx
 echo ""
-echo "8️⃣  Configurando logs..."
+echo "🔟 Configurando Nginx..."
+sudo tee /etc/nginx/sites-available/pagos > /dev/null <<'EOF'
+server {
+    listen 80;
+    server_name _;
+
+    client_max_body_size 10M;
+
+    location / {
+        proxy_pass http://127.0.0.1:5000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+    }
+
+    # Logs
+    access_log /var/log/nginx/pagos_access.log;
+    error_log /var/log/nginx/pagos_error.log;
+}
+EOF
+
+# Habilitar sitio
+sudo ln -sf /etc/nginx/sites-available/pagos /etc/nginx/sites-enabled/
+sudo rm -f /etc/nginx/sites-enabled/default
+
+# Verificar configuración
+sudo nginx -t || log_error "Error en configuración de Nginx"
+log_success "Nginx configurado"
+
+# 11. Configurar firewall (UFW)
+echo ""
+echo "1️⃣1️⃣  Configurando firewall..."
+if command -v ufw &> /dev/null; then
+    sudo ufw allow 22/tcp comment 'SSH'
+    sudo ufw allow 80/tcp comment 'HTTP'
+    sudo ufw allow 443/tcp comment 'HTTPS'
+    sudo ufw --force enable
+    log_success "Firewall configurado"
+else
+    log_warn "UFW no instalado, saltando configuración de firewall"
+fi
+
+# 12. Crear directorio de logs
+echo ""
+echo "1️⃣2️⃣  Configurando logs..."
 mkdir -p logs
 chmod 755 logs
 log_success "Directorio de logs creado"
 
-# 9. Resumen final
+# 13. Iniciar servicios
 echo ""
-echo "================================"
-echo "✅ DEPLOY LISTO"
-echo "================================"
+echo "1️⃣3️⃣  Iniciando servicios..."
+sudo systemctl restart pagos.service
+sudo systemctl restart nginx
+log_success "Servicios iniciados"
+
+# 14. Verificar estado
 echo ""
-echo "Próximos pasos:"
+echo "1️⃣4️⃣  Verificando estado..."
+sleep 3
+
+if sudo systemctl is-active --quiet pagos.service; then
+    log_success "Servicio pagos.service está corriendo"
+else
+    log_error "Servicio pagos.service no está corriendo. Ver logs: sudo journalctl -u pagos.service -n 50"
+fi
+
+if sudo systemctl is-active --quiet nginx; then
+    log_success "Nginx está corriendo"
+else
+    log_error "Nginx no está corriendo. Ver logs: sudo journalctl -u nginx -n 50"
+fi
+
+# 15. Obtener IP pública
 echo ""
-echo "Para desarrollo local:"
-echo "  source venv/bin/activate"
-echo "  python3 app_seguro.py"
+echo "1️⃣5️⃣  Obteniendo información del servidor..."
+PUBLIC_IP=$(curl -s http://checkip.amazonaws.com || echo "No disponible")
+PRIVATE_IP=$(hostname -I | awk '{print $1}')
+
+# Resumen final
 echo ""
-echo "Para producción con Gunicorn:"
-echo "  pip install gunicorn"
-echo "  gunicorn -w 4 -b 0.0.0.0:$PORT app_seguro:app"
+echo "======================================="
+echo "✅ DEPLOY COMPLETADO"
+echo "======================================="
 echo ""
-echo "Con Nginx reverse proxy:"
-echo "  sudo systemctl start nginx"
-echo "  sudo systemctl status nginx"
+echo "📊 Información del Servidor:"
+echo "  IP Pública:  $PUBLIC_IP"
+echo "  IP Privada:  $PRIVATE_IP"
+echo "  Puerto:      80 (HTTP)"
 echo ""
-echo "Verificar logs:"
-echo "  tail -f logs/app.log"
+echo "🌐 Acceso a la Aplicación:"
+echo "  Portal:      http://$PUBLIC_IP"
+echo "  Admin:       http://$PUBLIC_IP/login"
+echo "  Webhook:     http://$PUBLIC_IP/webhook-bdv"
 echo ""
-echo "Documentación de seguridad:"
+echo "🔧 Comandos Útiles:"
+echo "  Ver logs app:     sudo journalctl -u pagos.service -f"
+echo "  Ver logs nginx:   sudo tail -f /var/log/nginx/pagos_error.log"
+echo "  Reiniciar app:    sudo systemctl restart pagos.service"
+echo "  Reiniciar nginx:  sudo systemctl restart nginx"
+echo "  Estado servicios: sudo systemctl status pagos.service nginx"
+echo ""
+echo "📝 Configuración:"
+echo "  Editar .env:      nano .env"
+echo "  Editar nginx:     sudo nano /etc/nginx/sites-available/pagos"
+echo "  Editar servicio:  sudo nano /etc/systemd/system/pagos.service"
+echo ""
+echo "⚠️  IMPORTANTE:"
+echo "  1. Cambia el PIN por defecto (1234) en .env"
+echo "  2. Configura MacroDroid con: http://$PUBLIC_IP/webhook-bdv"
+echo "  3. Considera configurar HTTPS con Let's Encrypt"
+echo "  4. Configura backups automáticos de la BD"
+echo "  5. Monitorea los logs regularmente"
+echo ""
+echo "📚 Documentación:"
+echo "  cat LEEME_PRIMERO.md"
+echo "  cat CONFIGURACION_MACRODROID.md"
 echo "  cat SEGURIDAD.md"
 echo ""
-echo "⚠️  RECUERDA:"
-echo "  - Nunca compartir .env"
-echo "  - Usar HTTPS en producción"
-echo "  - Cambiar ADMIN_PASSWORD_HASH periódicamente"
-echo "  - Hacer backups diarios de la BD"
-echo "  - Monitorear logs regularmente"
+echo "🎉 ¡Aplicación desplegada exitosamente!"
 echo ""

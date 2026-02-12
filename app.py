@@ -253,7 +253,76 @@ HTML_PORTAL = '''<!DOCTYPE html><html><head><meta name="viewport" content="width
 {% endif %}
 </div></div></div></body></html>'''
 
-HTML_ADMIN = '''<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>''' + CSS_FINAL + '''</style></head><body><div class="container"><div class="nav-header"><h2>Panel de Control</h2><div style="display:flex; gap:10px; flex-wrap:wrap;"><a href="/" class="btn btn-light">🔍 Verificador</a><a href="/admin/exportar" class="btn btn-success">Excel</a><a href="/logout" class="btn btn-danger">Salir</a></div></div><div class="card" style="padding:15px;"><input type="text" id="busc" placeholder="🔍 Filtrar registros..." onkeyup="f()"></div><div class="table-wrapper"><table id="tab"><thead><tr><th>Recepción (VET)</th><th>Banco</th><th>Emisor</th><th>Monto</th><th>Referencia</th><th>Comanda</th><th>Fecha Canje</th><th>IP Canje</th><th>Acciones</th></tr></thead><tbody>{% for p in pagos %}<tr>
+HTML_ADMIN = '''<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>''' + CSS_FINAL + '''
+.pagination { display: flex; justify-content: center; align-items: center; gap: 10px; margin: 25px 0; flex-wrap: wrap; }
+.pagination a, .pagination span { padding: 10px 15px; border-radius: 8px; text-decoration: none; font-weight: 600; transition: 0.3s; }
+.pagination a { background: white; color: var(--primary); border: 2px solid var(--primary); }
+.pagination a:hover { background: var(--primary); color: white; }
+.pagination .active { background: var(--primary); color: white; border: 2px solid var(--primary); }
+.pagination .disabled { background: #f0f0f0; color: #999; border: 2px solid #ddd; cursor: not-allowed; }
+.pagination-info { text-align: center; color: #666; font-size: 14px; margin: 15px 0; }
+.per-page-selector { display: flex; justify-content: center; align-items: center; gap: 10px; margin: 15px 0; }
+.per-page-selector select { padding: 8px 12px; border-radius: 8px; border: 2px solid #ddd; font-size: 14px; cursor: pointer; }
+.search-form { display: flex; gap: 10px; align-items: center; }
+.search-form input[type="text"] { flex: 1; }
+.search-form button { white-space: nowrap; }
+</style></head><body><div class="container"><div class="nav-header"><h2>Panel de Control</h2><div style="display:flex; gap:10px; flex-wrap:wrap;"><a href="/" class="btn btn-light">🔍 Verificador</a><a href="/admin/exportar" class="btn btn-success">📊 Excel</a><a href="/logout" class="btn btn-danger">🚪 Salir</a></div></div>
+
+<div class="pagination-info">
+    {% if paginacion.search %}
+        Resultados de búsqueda: <strong>{{ paginacion.total_registros }}</strong> registros encontrados
+        <br>
+        <a href="/admin?page=1&per_page={{ paginacion.per_page }}" class="btn btn-light" style="margin-top:10px;">❌ Limpiar búsqueda</a>
+    {% else %}
+        Mostrando <strong>{{ paginacion.inicio_registro }}</strong> a <strong>{{ paginacion.fin_registro }}</strong> de <strong>{{ paginacion.total_registros }}</strong> registros
+    {% endif %}
+</div>
+
+<div class="per-page-selector">
+    <label>Registros por página:</label>
+    <select onchange="window.location.href='/admin?page=1&per_page='+this.value{% if paginacion.search %}&search={{ paginacion.search }}{% endif %}">
+        <option value="25" {% if paginacion.per_page == 25 %}selected{% endif %}>25</option>
+        <option value="50" {% if paginacion.per_page == 50 %}selected{% endif %}>50</option>
+        <option value="100" {% if paginacion.per_page == 100 %}selected{% endif %}>100</option>
+        <option value="200" {% if paginacion.per_page == 200 %}selected{% endif %}>200</option>
+    </select>
+</div>
+
+<div class="card" style="padding:15px;">
+    <form method="GET" action="/admin" class="search-form">
+        <input type="hidden" name="page" value="1">
+        <input type="hidden" name="per_page" value="{{ paginacion.per_page }}">
+        <input type="text" name="search" placeholder="🔍 Buscar por referencia, comanda, banco, emisor o monto..." value="{{ paginacion.search }}" autofocus>
+        <button type="submit" class="btn btn-primary">Buscar</button>
+        {% if paginacion.search %}
+            <a href="/admin?page=1&per_page={{ paginacion.per_page }}" class="btn btn-light">Limpiar</a>
+        {% endif %}
+    </form>
+</div>
+
+<div class="pagination">
+    {% if paginacion.tiene_anterior %}
+        <a href="/admin?page=1&per_page={{ paginacion.per_page }}{% if paginacion.search %}&search={{ paginacion.search }}{% endif %}">⏮️ Primera</a>
+        <a href="/admin?page={{ paginacion.pagina_anterior }}&per_page={{ paginacion.per_page }}{% if paginacion.search %}&search={{ paginacion.search }}{% endif %}">⬅️ Anterior</a>
+    {% else %}
+        <span class="disabled">⏮️ Primera</span>
+        <span class="disabled">⬅️ Anterior</span>
+    {% endif %}
+    
+    <span class="active">Página {{ paginacion.page }} de {{ paginacion.total_paginas }}</span>
+    
+    {% if paginacion.tiene_siguiente %}
+        <a href="/admin?page={{ paginacion.pagina_siguiente }}&per_page={{ paginacion.per_page }}{% if paginacion.search %}&search={{ paginacion.search }}{% endif %}">Siguiente ➡️</a>
+        <a href="/admin?page={{ paginacion.total_paginas }}&per_page={{ paginacion.per_page }}{% if paginacion.search %}&search={{ paginacion.search }}{% endif %}">Última ⏭️</a>
+    {% else %}
+        <span class="disabled">Siguiente ➡️</span>
+        <span class="disabled">Última ⏭️</span>
+    {% endif %}
+</div>
+
+<div class="table-wrapper"><table id="tab"><thead><tr><th>Recepción (VET)</th><th>Banco</th><th>Emisor</th><th>Monto</th><th>Referencia</th><th>Comanda</th><th>Fecha Canje</th><th>IP Canje</th><th>Acciones</th></tr></thead><tbody>
+{% if pagos %}
+{% for p in pagos %}<tr>
 <td><small>{{p[1]}}<br>{{p[2]}}</small></td>
 <td><span class="badge badge-{{p[10]|lower}}">{{p[10]}}</span></td>
 <td>{{p[3]}}</td>
@@ -265,7 +334,39 @@ HTML_ADMIN = '''<!DOCTYPE html><html><head><meta name="viewport" content="width=
 <td><div style="display:flex; gap:5px; justify-content:center;">
 <form method="POST" action="/admin/liberar" style="display:flex; gap:2px;"><input type="hidden" name="ref" value="{{p[5]}}"><input type="password" name="pw" placeholder="PIN" style="width:40px; padding:5px; font-size:9px;" required><button class="btn-warning" style="padding:5px 8px; border-radius:6px; border:none; cursor:pointer;" title="Liberar">🔓</button></form>
 <form method="POST" action="/admin/eliminar" onsubmit="return confirm('¿Borrar definitivamente?');" style="display:flex; gap:2px;"><input type="hidden" name="ref" value="{{p[5]}}"><input type="password" name="pw" placeholder="PIN" style="width:40px; padding:5px; font-size:9px;" required><button class="btn-danger" style="padding:5px 8px; border-radius:6px; border:none; cursor:pointer;" title="Eliminar">🗑️</button></form>
-</div></td></tr>{% endfor %}</tbody></table></div><div class="grid-totales"><div class="total-item" style="background:linear-gradient(135deg,#D32F2F,#FF5252);">Bs. {{ totales.bs }}</div><div class="total-item" style="background:linear-gradient(135deg,#f3ba2f,#fdd835); color:#000;">$ {{ totales.usd }}</div><div class="total-item" style="background:linear-gradient(135deg,#007A33,#2E7D32);">{{ totales.cop }} COP</div></div></div><script>function f(){let v=document.getElementById("busc").value.toUpperCase(),t=document.getElementById("tab"),r=t.getElementsByTagName("tr");for(let i=1;i<r.length;i++){r[i].style.display=r[i].innerText.toUpperCase().includes(v)?"":"none"}}</script></body></html>'''
+</div></td></tr>{% endfor %}
+{% else %}
+<tr><td colspan="9" style="text-align:center; padding:40px; color:#999;">
+    {% if paginacion.search %}
+        No se encontraron resultados para "{{ paginacion.search }}"
+    {% else %}
+        No hay registros para mostrar
+    {% endif %}
+</td></tr>
+{% endif %}
+</tbody></table></div>
+
+<div class="pagination">
+    {% if paginacion.tiene_anterior %}
+        <a href="/admin?page=1&per_page={{ paginacion.per_page }}{% if paginacion.search %}&search={{ paginacion.search }}{% endif %}">⏮️ Primera</a>
+        <a href="/admin?page={{ paginacion.pagina_anterior }}&per_page={{ paginacion.per_page }}{% if paginacion.search %}&search={{ paginacion.search }}{% endif %}">⬅️ Anterior</a>
+    {% else %}
+        <span class="disabled">⏮️ Primera</span>
+        <span class="disabled">⬅️ Anterior</span>
+    {% endif %}
+    
+    <span class="active">Página {{ paginacion.page }} de {{ paginacion.total_paginas }}</span>
+    
+    {% if paginacion.tiene_siguiente %}
+        <a href="/admin?page={{ paginacion.pagina_siguiente }}&per_page={{ paginacion.per_page }}{% if paginacion.search %}&search={{ paginacion.search }}{% endif %}">Siguiente ➡️</a>
+        <a href="/admin?page={{ paginacion.total_paginas }}&per_page={{ paginacion.per_page }}{% if paginacion.search %}&search={{ paginacion.search }}{% endif %}">Última ⏭️</a>
+    {% else %}
+        <span class="disabled">Siguiente ➡️</span>
+        <span class="disabled">Última ⏭️</span>
+    {% endif %}
+</div>
+
+<div class="grid-totales"><div class="total-item" style="background:linear-gradient(135deg,#D32F2F,#FF5252);">Bs. {{ totales.bs }}</div><div class="total-item" style="background:linear-gradient(135deg,#f3ba2f,#fdd835); color:#000;">$ {{ totales.usd }}</div><div class="total-item" style="background:linear-gradient(135deg,#007A33,#2E7D32);">{{ totales.cop }} COP</div></div></div></body></html>'''
 
 # --- RUTAS ---
 @app.route('/')
@@ -294,24 +395,94 @@ def login():
 
 @app.route('/admin')
 def admin():
-    """Panel administrativo (requiere autenticación)"""
+    """Panel administrativo con paginación y búsqueda global (requiere autenticación)"""
     if not session.get('logged_in'):
         return redirect(url_for('login'))
     
     try:
+        # Obtener parámetros de paginación y búsqueda
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('per_page', 50, type=int)
+        search = request.args.get('search', '', type=str).strip()
+        
+        # Validar parámetros
+        if page < 1:
+            page = 1
+        if per_page not in [25, 50, 100, 200]:
+            per_page = 50
+        
+        offset = (page - 1) * per_page
+        
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("""
-            SELECT id, fecha_recepcion, hora_recepcion, emisor, monto, referencia, 
-                   mensaje_completo, fecha_canje, estado, comanda, banco, ip_canje 
-            FROM pagos ORDER BY id DESC LIMIT 1000
-        """)
-        pagos = cur.fetchall()
+        
+        # Construir query con búsqueda
+        if search:
+            # Búsqueda en múltiples campos
+            search_pattern = f"%{search}%"
+            
+            # Contar total de registros con búsqueda
+            cur.execute("""
+                SELECT COUNT(*) FROM pagos 
+                WHERE referencia ILIKE %s 
+                   OR comanda ILIKE %s 
+                   OR emisor ILIKE %s 
+                   OR banco ILIKE %s
+                   OR monto::text ILIKE %s
+            """, (search_pattern, search_pattern, search_pattern, search_pattern, search_pattern))
+            total_registros = cur.fetchone()[0]
+            total_paginas = (total_registros + per_page - 1) // per_page if total_registros > 0 else 1
+            
+            # Obtener registros filtrados
+            cur.execute("""
+                SELECT id, fecha_recepcion, hora_recepcion, emisor, monto, referencia, 
+                       mensaje_completo, fecha_canje, estado, comanda, banco, ip_canje 
+                FROM pagos 
+                WHERE referencia ILIKE %s 
+                   OR comanda ILIKE %s 
+                   OR emisor ILIKE %s 
+                   OR banco ILIKE %s
+                   OR monto::text ILIKE %s
+                ORDER BY id DESC 
+                LIMIT %s OFFSET %s
+            """, (search_pattern, search_pattern, search_pattern, search_pattern, search_pattern, per_page, offset))
+            pagos = cur.fetchall()
+        else:
+            # Sin búsqueda - query normal
+            cur.execute("SELECT COUNT(*) FROM pagos")
+            total_registros = cur.fetchone()[0]
+            total_paginas = (total_registros + per_page - 1) // per_page if total_registros > 0 else 1
+            
+            cur.execute("""
+                SELECT id, fecha_recepcion, hora_recepcion, emisor, monto, referencia, 
+                       mensaje_completo, fecha_canje, estado, comanda, banco, ip_canje 
+                FROM pagos 
+                ORDER BY id DESC 
+                LIMIT %s OFFSET %s
+            """, (per_page, offset))
+            pagos = cur.fetchall()
+        
+        # Calcular totales (de todos los registros, no solo la página actual)
+        if search:
+            # Totales solo de los registros filtrados
+            cur.execute("""
+                SELECT monto, banco FROM pagos 
+                WHERE referencia ILIKE %s 
+                   OR comanda ILIKE %s 
+                   OR emisor ILIKE %s 
+                   OR banco ILIKE %s
+                   OR monto::text ILIKE %s
+            """, (search_pattern, search_pattern, search_pattern, search_pattern, search_pattern))
+        else:
+            # Totales de todos los registros
+            cur.execute("SELECT monto, banco FROM pagos")
+        
+        todos_pagos = cur.fetchall()
         
         t_bs, t_usd, t_cop = 0.0, 0.0, 0.0
-        for p in pagos:
+        for p in todos_pagos:
             try:
-                m, b = str(p[4]), p[10]
+                m, b = str(p[0]), p[1]
                 val = float(m.replace('.', '').replace(',', '.')) if ',' in m else float(m)
                 if b == 'BINANCE':
                     t_usd += val
@@ -323,8 +494,26 @@ def admin():
                 continue
         
         totales = {"bs": f"{t_bs:,.2f}", "usd": f"{t_usd:,.2f}", "cop": f"{t_cop:,.0f}"}
+        
+        # Información de paginación
+        paginacion = {
+            "page": page,
+            "per_page": per_page,
+            "total_registros": total_registros,
+            "total_paginas": total_paginas,
+            "tiene_anterior": page > 1,
+            "tiene_siguiente": page < total_paginas,
+            "pagina_anterior": page - 1,
+            "pagina_siguiente": page + 1,
+            "inicio_registro": offset + 1 if total_registros > 0 else 0,
+            "fin_registro": min(offset + per_page, total_registros),
+            "search": search  # Pasar el término de búsqueda al template
+        }
+        
         conn.close()
-        return render_template_string(HTML_ADMIN, pagos=pagos, totales=totales)
+        return render_template_string(HTML_ADMIN, pagos=pagos, totales=totales, paginacion=paginacion)
+        conn.close()
+        return render_template_string(HTML_ADMIN, pagos=pagos, totales=totales, paginacion=paginacion)
     
     except Exception as e:
         logger.error(f"Error en admin: {e}")

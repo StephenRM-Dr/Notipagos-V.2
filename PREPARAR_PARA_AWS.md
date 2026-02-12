@@ -126,7 +126,7 @@ cd /home/ubuntu
 mv pagos pagos-backup-$(date +%Y%m%d)
 
 # Clonar nueva versión
-git clone https://github.com/tu-usuario/tu-repo.git pagos
+git clone https://github.com/StephenRM-Dr/Notipagos-V.2.git pagos
 cd pagos
 
 # O actualizar si ya existe

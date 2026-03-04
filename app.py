@@ -4,15 +4,20 @@ import os
 import pandas as pd
 import pytz
 import secrets
-from flask import Flask, request, render_template_string, redirect, url_for, session, send_file
+from flask import Flask, request, render_template_string, redirect, url_for, session, send_file, jsonify
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
 from cryptography.fernet import Fernet
 from datetime import datetime, timedelta
 from io import BytesIO
 from dotenv import load_dotenv, set_key
 import logging
+
+# Importar funciones del API BDV
+from banco_api import validar_pago_bdv, registrar_pago_validado
+from templates_bdv import HTML_VALIDAR_BDV
 
 # --- GENERACIÓN AUTOMÁTICA DE CLAVES ---
 def generar_claves_automaticas():
@@ -64,6 +69,13 @@ app = Flask(__name__)
 # Obtener SECRET_KEY (ya garantizada por la función anterior)
 secret_key = os.getenv("SECRET_KEY")
 app.secret_key = secret_key
+
+# Configurar CORS
+CORS(app, resources={
+    r"/validar-pago-bdv": {"origins": "*"},
+    r"/verificar": {"origins": "*"}
+})
+
 limiter = Limiter(app=app, key_func=get_remote_address, default_limits=["200 per day", "50 per hour"])
 
 # Configurar logging
@@ -512,17 +524,37 @@ def admin():
         
         conn.close()
         return render_template_string(HTML_ADMIN, pagos=pagos, totales=totales, paginacion=paginacion)
-        conn.close()
-        return render_template_string(HTML_ADMIN, pagos=pagos, totales=totales, paginacion=paginacion)
     
     except Exception as e:
         logger.error(f"Error en admin: {e}")
-        return "Error al cargar panel", 500
+        return render_template_string(HTML_ADMIN, pagos=[], totales={"bs": "0.00", "usd": "0.00", "cop": "0"}, paginacion={
+            "page": 1,
+            "per_page": 50,
+            "total_registros": 0,
+            "total_paginas": 1,
+            "tiene_anterior": False,
+            "tiene_siguiente": False,
+            "pagina_anterior": 0,
+            "pagina_siguiente": 2,
+            "inicio_registro": 0,
+            "fin_registro": 0,
+            "search": ""
+        })
+
+
+@app.route('/validar-bdv')
+def validar_bdv_form():
+    """Formulario para validar pagos con el API del BDV"""
+    if not session.get('logged_in'):
+        return redirect(url_for('login'))
+    
+    return render_template_string(HTML_VALIDAR_BDV)
+
 
 @app.route('/verificar', methods=['POST'])
 @limiter.limit("10 per minute")
 def verificar():
-    """Verificar transacción con validación completa - Acepta referencia completa o últimos 6 dígitos"""
+    """Verificar transacción con validación BDV automática - Solo requiere referencia y comanda"""
     ref = request.form.get('ref', '').strip()
     com_ingresada = request.form.get('comanda', '').strip()
     
@@ -554,13 +586,13 @@ def verificar():
         if len(ref) == 6 and ref.isdigit():
             # Búsqueda por últimos 6 dígitos
             cur.execute(
-                "SELECT id, estado, banco, monto, referencia FROM pagos WHERE referencia LIKE %s",
+                "SELECT id, estado, banco, monto, referencia, cedula_pagador, telefono_pagador, fecha_pago FROM pagos WHERE referencia LIKE %s",
                 ('%' + ref,)
             )
         else:
             # Búsqueda por referencia completa
             cur.execute(
-                "SELECT id, estado, banco, monto, referencia FROM pagos WHERE referencia = %s",
+                "SELECT id, estado, banco, monto, referencia, cedula_pagador, telefono_pagador, fecha_pago FROM pagos WHERE referencia = %s",
                 (ref,)
             )
         
@@ -568,7 +600,7 @@ def verificar():
         
         # Validar resultados
         if not pagos_encontrados:
-            res = {"titulo": "ERROR", "mensaje": "Referencia no encontrada.", "clase": "error"}
+            res = {"titulo": "ERROR", "mensaje": "Referencia no encontrada en el sistema.", "clase": "error"}
         elif len(pagos_encontrados) > 1:
             res = {
                 "titulo": "REFERENCIA AMBIGUA",
@@ -577,13 +609,15 @@ def verificar():
             }
         else:
             pago = pagos_encontrados[0]
+            pago_id, estado, banco, monto, referencia_completa, cedula, telefono, fecha_pago = pago
             
-            if pago[1] == 'LIBRE':
+            if estado == 'LIBRE':
+                # Canjear el pago
                 cur.execute("""
                     UPDATE pagos 
                     SET estado = 'CANJEADO', comanda = %s, fecha_canje = %s, ip_canje = %s 
                     WHERE id = %s
-                """, (com_ingresada, fecha_accion, user_ip, pago[0]))
+                """, (com_ingresada, fecha_accion, user_ip, pago_id))
                 conn.commit()
                 
                 res = {
@@ -591,9 +625,9 @@ def verificar():
                     "mensaje": "Comprobante vinculado exitosamente.",
                     "clase": "success",
                     "datos": {
-                        "banco": pago[2],
-                        "monto": pago[3],
-                        "ref": pago[4],
+                        "banco": banco,
+                        "monto": monto,
+                        "ref": referencia_completa,
                         "comanda": com_ingresada,
                         "fecha": fecha_accion,
                         "ip": user_ip
@@ -616,6 +650,98 @@ def verificar():
             "titulo": "ERROR",
             "mensaje": "Error procesando la solicitud",
             "clase": "error"
+        }), 500
+
+
+@app.route('/validar-pago-bdv', methods=['POST'])
+@limiter.limit("10 per minute")
+def validar_pago_bdv_route():
+    """Valida un pago con el API del BDV usando solo referencia y banco"""
+    try:
+        # Log de la petición
+        logger.info(f"Petición recibida en /validar-pago-bdv")
+        logger.info(f"Form data: {request.form}")
+        
+        # Obtener datos del formulario
+        referencia = request.form.get('referencia', '').strip()
+        banco = request.form.get('banco', '').strip()
+        importe = request.form.get('importe', '').strip()
+        
+        logger.info(f"Datos recibidos - Ref: {referencia}, Banco: {banco}, Importe: {importe}")
+        
+        # Validaciones básicas
+        if not referencia:
+            logger.warning("Referencia vacía")
+            return jsonify({
+                'success': False,
+                'message': 'La referencia es obligatoria'
+            }), 400
+        
+        if not banco:
+            logger.warning("Banco vacío")
+            return jsonify({
+                'success': False,
+                'message': 'El banco es obligatorio'
+            }), 400
+        
+        # Validar con el API del BDV
+        logger.info(f"Llamando a validar_pago_bdv...")
+        resultado_bdv = validar_pago_bdv(
+            referencia=referencia,
+            banco_origen=banco,
+            importe=importe if importe else None
+        )
+        
+        logger.info(f"Resultado BDV: {resultado_bdv}")
+        
+        if resultado_bdv['success']:
+            # Registrar en la base de datos con el monto real del banco
+            monto_validado = resultado_bdv.get('amount', importe or '0.01')
+            
+            registrado = registrar_pago_validado(
+                cedula="N/A",
+                telefono="N/A",
+                referencia=referencia,
+                monto=monto_validado,
+                banco_origen=banco,
+                datos_bdv=resultado_bdv
+            )
+            
+            if registrado:
+                return jsonify({
+                    'success': True,
+                    'message': 'Pago validado y registrado exitosamente',
+                    'data': {
+                        'referencia': referencia,
+                        'monto': monto_validado,
+                        'estado': resultado_bdv.get('reason'),
+                        'banco': banco
+                    }
+                })
+            else:
+                return jsonify({
+                    'success': False,
+                    'message': 'Pago validado pero no se pudo registrar (puede que ya exista)'
+                }), 500
+        else:
+            return jsonify({
+                'success': False,
+                'message': resultado_bdv.get('message', 'Error al validar el pago'),
+                'code': resultado_bdv.get('code')
+            }), 400
+            
+    except Exception as e:
+        logger.error(f"Error en validar_pago_bdv_route: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'message': f'Error interno: {str(e)}'
+        }), 500
+            
+    except Exception as e:
+        logger.error(f"Error en validar_pago_bdv_route: {e}")
+        return jsonify({
+            'success': False,
+            'message': f'Error interno: {str(e)}'
         }), 500
 
 @app.route('/admin/liberar', methods=['POST'])
